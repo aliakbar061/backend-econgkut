@@ -11,12 +11,16 @@ from typing import List, Optional, Dict
 import uuid
 from datetime import datetime, timezone, timedelta
 import aiohttp
-import stripe
-from authlib.integrations.starlette_client import OAuth
-from starlette.config import Config
+from emergentintegrations.payments.stripe.checkout import StripeCheckout, CheckoutSessionResponse, CheckoutStatusResponse, CheckoutSessionRequest
+from google.oauth2 import id_token
+from google.auth.transport import requests as google_requests
+from urllib.parse import urlencode
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
+
+# Get backend URL from environment or construct it
+BACKEND_URL = os.environ.get('BACKEND_URL', 'https://backend-econgkut.vercel.app')
 
 # MongoDB connection
 mongo_url = os.environ['MONGO_URL']
@@ -30,23 +34,12 @@ app = FastAPI()
 api_router = APIRouter(prefix="/api")
 
 # Stripe configuration
-stripe.api_key = os.environ.get('STRIPE_API_KEY', 'sk_test_emergent')
+stripe_api_key = os.environ.get('STRIPE_API_KEY', 'sk_test_emergent')
 
-# OAuth configuration
-config = Config(environ=os.environ)
-oauth = OAuth(config)
-
-GOOGLE_CLIENT_ID = os.environ.get('GOOGLE_CLIENT_ID')
-GOOGLE_CLIENT_SECRET = os.environ.get('GOOGLE_CLIENT_SECRET')
-FRONTEND_URL = os.environ.get('FRONTEND_URL', 'http://localhost:3000')
-
-oauth.register(
-    name='google',
-    client_id=GOOGLE_CLIENT_ID,
-    client_secret=GOOGLE_CLIENT_SECRET,
-    server_metadata_url='https://accounts.google.com/.well-known/openid-configuration',
-    client_kwargs={'scope': 'openid email profile'}
-)
+# Google OAuth configuration
+google_client_id = os.environ.get('GOOGLE_CLIENT_ID')
+google_client_secret = os.environ.get('GOOGLE_CLIENT_SECRET')
+frontend_url = os.environ.get('FRONTEND_URL', 'https://econgkut.vercel.app')
 
 # ==================== MODELS ====================
 
@@ -173,35 +166,66 @@ async def require_admin(request: Request, authorization: Optional[str] = Header(
         raise HTTPException(status_code=403, detail="Admin access required")
     return user
 
-# ==================== AUTH ENDPOINTS ====================
+# ==================== GOOGLE OAUTH ENDPOINTS ====================
 
-@api_router.get("/auth/session")
-async def auth_session(request: Request):
-    """Initiate Google OAuth login"""
-    redirect_uri = os.environ.get('GOOGLE_REDIRECT_URI', 'https://backend-econgkut.vercel.app/api/auth/google/callback')
-    return await oauth.google.authorize_redirect(request, redirect_uri)
+@api_router.get("/auth/google")
+async def google_login():
+    """Redirect to Google OAuth"""
+    redirect_uri = f"{BACKEND_URL}/api/auth/google/callback"
+    
+    params = {
+        'client_id': google_client_id,
+        'redirect_uri': redirect_uri,
+        'response_type': 'code',
+        'scope': 'openid email profile',
+        'access_type': 'offline',
+        'prompt': 'consent'
+    }
+    
+    google_auth_url = f"https://accounts.google.com/o/oauth2/v2/auth?{urlencode(params)}"
+    
+    return RedirectResponse(url=google_auth_url)
 
 @api_router.get("/auth/google/callback")
-async def auth_google_callback(request: Request):
+async def google_callback(code: str):
     """Handle Google OAuth callback"""
     try:
-        # Get token from Google
-        token = await oauth.google.authorize_access_token(request)
-        user_info = token.get('userinfo')
+        # Exchange code for tokens
+        redirect_uri = f"{BACKEND_URL}/api/auth/google/callback"
         
-        if not user_info:
-            raise HTTPException(status_code=400, detail="Failed to get user info")
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                'https://oauth2.googleapis.com/token',
+                data={
+                    'code': code,
+                    'client_id': google_client_id,
+                    'client_secret': google_client_secret,
+                    'redirect_uri': redirect_uri,
+                    'grant_type': 'authorization_code'
+                }
+            ) as resp:
+                if resp.status != 200:
+                    raise HTTPException(status_code=400, detail="Failed to exchange code")
+                
+                token_data = await resp.json()
+        
+        # Verify ID token and get user info
+        id_info = id_token.verify_oauth2_token(
+            token_data['id_token'],
+            google_requests.Request(),
+            google_client_id
+        )
         
         # Check if user exists
-        user_doc = await db.users.find_one({"email": user_info["email"]}, {"_id": 0})
+        user_doc = await db.users.find_one({"email": id_info["email"]}, {"_id": 0})
         
         if not user_doc:
             # Create new user
             user = User(
-                id=str(uuid.uuid4()),
-                email=user_info["email"],
-                name=user_info.get("name", ""),
-                picture=user_info.get("picture"),
+                id=id_info["sub"],
+                email=id_info["email"],
+                name=id_info.get("name", ""),
+                picture=id_info.get("picture"),
                 role="user"
             )
             user_dict = user.model_dump()
@@ -226,8 +250,11 @@ async def auth_google_callback(request: Request):
         
         await db.user_sessions.insert_one(session_dict)
         
-        # Redirect to frontend with session token
-        response = RedirectResponse(url=f"{FRONTEND_URL}/auth/callback?token={session_token}")
+        # Create response with redirect
+        redirect_url = f"{frontend_url}/auth/callback?session_token={session_token}"
+        response = RedirectResponse(url=redirect_url)
+        
+        # Set cookie
         response.set_cookie(
             key="session_token",
             value=session_token,
@@ -241,8 +268,8 @@ async def auth_google_callback(request: Request):
         return response
         
     except Exception as e:
-        logging.error(f"OAuth callback error: {e}")
-        return RedirectResponse(url=f"{FRONTEND_URL}?error=auth_failed")
+        logging.error(f"Google OAuth callback error: {e}")
+        return RedirectResponse(url=f"{frontend_url}?error=auth_failed")
 
 @api_router.get("/auth/me")
 async def get_me(request: Request, authorization: Optional[str] = Header(None)):
@@ -360,51 +387,38 @@ async def create_checkout(checkout_req: CheckoutRequest, request: Request, autho
     if booking["payment_status"] == "paid":
         raise HTTPException(status_code=400, detail="Booking already paid")
     
+    # Initialize Stripe checkout
+    webhook_url = f"{checkout_req.origin_url}/api/webhook/stripe"
+    stripe_checkout = StripeCheckout(api_key=stripe_api_key, webhook_url=webhook_url)
+    
     # Build URLs from provided origin
     success_url = f"{checkout_req.origin_url}/payment-success?session_id={{CHECKOUT_SESSION_ID}}&booking_id={booking['id']}"
     cancel_url = f"{checkout_req.origin_url}/bookings"
     
-    # Create Stripe checkout session
-    try:
-        session = stripe.checkout.Session.create(
-            payment_method_types=['card'],
-            line_items=[{
-                'price_data': {
-                    'currency': 'usd',
-                    'product_data': {
-                        'name': f"Pickup Sampah - {booking['waste_type_name']}",
-                        'description': f"{booking['estimated_weight']} kg sampah {booking['waste_type_name']}",
-                    },
-                    'unit_amount': int(booking['estimated_price'] * 100),  # Convert to cents
-                },
-                'quantity': 1,
-            }],
-            mode='payment',
-            success_url=success_url,
-            cancel_url=cancel_url,
-            metadata={
-                'booking_id': booking['id'],
-                'user_id': user.id,
-                'user_email': user.email
-            }
-        )
-    except Exception as e:
-        logging.error(f"Stripe checkout error: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to create checkout session: {str(e)}")
+    # Create checkout session
+    checkout_request = CheckoutSessionRequest(
+        amount=float(booking["estimated_price"]),
+        currency="usd",
+        success_url=success_url,
+        cancel_url=cancel_url,
+        metadata={
+            "booking_id": booking["id"],
+            "user_id": user.id,
+            "user_email": user.email
+        }
+    )
+    
+    session: CheckoutSessionResponse = await stripe_checkout.create_checkout_session(checkout_request)
     
     # Create payment transaction record
     payment = PaymentTransaction(
-        booking_id=booking['id'],
+        booking_id=booking["id"],
         user_id=user.id,
-        session_id=session.id,
-        amount=float(booking['estimated_price']),
-        currency='usd',
-        payment_status='pending',
-        metadata={
-            'booking_id': booking['id'],
-            'user_id': user.id,
-            'user_email': user.email
-        }
+        session_id=session.session_id,
+        amount=float(booking["estimated_price"]),
+        currency="usd",
+        payment_status="pending",
+        metadata=checkout_request.metadata
     )
     
     payment_dict = payment.model_dump()
@@ -415,61 +429,53 @@ async def create_checkout(checkout_req: CheckoutRequest, request: Request, autho
     
     # Update booking with session ID
     await db.bookings.update_one(
-        {"id": booking['id']},
-        {"$set": {"payment_session_id": session.id}}
+        {"id": booking["id"]},
+        {"$set": {"payment_session_id": session.session_id}}
     )
     
-    return {"url": session.url, "session_id": session.id}
+    return {"url": session.url, "session_id": session.session_id}
 
 @api_router.get("/payments/status/{session_id}")
 async def get_payment_status(session_id: str, request: Request, authorization: Optional[str] = Header(None)):
     """Get payment status"""
     user = await require_auth(request, authorization)
     
-    try:
-        # Get checkout session from Stripe
-        session = stripe.checkout.Session.retrieve(session_id)
-        payment_status = "paid" if session.payment_status == "paid" else "pending"
-        
-        # Update payment transaction
-        payment = await db.payment_transactions.find_one({"session_id": session_id}, {"_id": 0})
-        
-        if payment:
-            # Check if already processed to avoid double processing
-            if payment["payment_status"] != "paid" and payment_status == "paid":
-                # Update payment transaction
-                await db.payment_transactions.update_one(
-                    {"session_id": session_id},
-                    {
-                        "$set": {
-                            "payment_status": payment_status,
-                            "updated_at": datetime.now(timezone.utc).isoformat()
-                        }
-                    }
-                )
-                
-                # Update booking
-                await db.bookings.update_one(
-                    {"id": payment["booking_id"]},
-                    {
-                        "$set": {
-                            "payment_status": "paid",
-                            "status": "confirmed",
-                            "updated_at": datetime.now(timezone.utc).isoformat()
-                        }
-                    }
-                )
-        
-        return {
-            "session_id": session.id,
-            "payment_status": payment_status,
-            "amount_total": session.amount_total / 100 if session.amount_total else 0,
-            "currency": session.currency
-        }
+    # Initialize Stripe checkout (webhook_url not needed for status check)
+    stripe_checkout = StripeCheckout(api_key=stripe_api_key, webhook_url="")
     
-    except stripe.error.StripeError as e:
-        logging.error(f"Stripe error: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
+    # Get checkout status from Stripe
+    checkout_status: CheckoutStatusResponse = await stripe_checkout.get_checkout_status(session_id)
+    
+    # Update payment transaction
+    payment = await db.payment_transactions.find_one({"session_id": session_id}, {"_id": 0})
+    
+    if payment:
+        # Check if already processed to avoid double processing
+        if payment["payment_status"] != "paid" and checkout_status.payment_status == "paid":
+            # Update payment transaction
+            await db.payment_transactions.update_one(
+                {"session_id": session_id},
+                {
+                    "$set": {
+                        "payment_status": checkout_status.payment_status,
+                        "updated_at": datetime.now(timezone.utc).isoformat()
+                    }
+                }
+            )
+            
+            # Update booking
+            await db.bookings.update_one(
+                {"id": payment["booking_id"]},
+                {
+                    "$set": {
+                        "payment_status": "paid",
+                        "status": "confirmed",
+                        "updated_at": datetime.now(timezone.utc).isoformat()
+                    }
+                }
+            )
+    
+    return checkout_status
 
 @api_router.post("/webhook/stripe")
 async def stripe_webhook(request: Request):
@@ -478,33 +484,16 @@ async def stripe_webhook(request: Request):
         body_bytes = await request.body()
         stripe_signature = request.headers.get("Stripe-Signature")
         
-        # Verify webhook signature (optional but recommended)
-        webhook_secret = os.environ.get('STRIPE_WEBHOOK_SECRET')
+        stripe_checkout = StripeCheckout(api_key=stripe_api_key, webhook_url="")
+        webhook_response = await stripe_checkout.handle_webhook(body_bytes, stripe_signature)
         
-        try:
-            if webhook_secret:
-                event = stripe.Webhook.construct_event(
-                    body_bytes, stripe_signature, webhook_secret
-                )
-            else:
-                event = stripe.Event.construct_from(
-                    await request.json(), stripe.api_key
-                )
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid payload")
-        except stripe.error.SignatureVerificationError:
-            raise HTTPException(status_code=400, detail="Invalid signature")
-        
-        # Handle the event
-        if event.type == 'checkout.session.completed':
-            session = event.data.object
-            
+        if webhook_response.payment_status == "paid":
             # Update payment transaction
-            payment = await db.payment_transactions.find_one({"session_id": session.id}, {"_id": 0})
+            payment = await db.payment_transactions.find_one({"session_id": webhook_response.session_id}, {"_id": 0})
             
             if payment and payment["payment_status"] != "paid":
                 await db.payment_transactions.update_one(
-                    {"session_id": session.id},
+                    {"session_id": webhook_response.session_id},
                     {
                         "$set": {
                             "payment_status": "paid",
