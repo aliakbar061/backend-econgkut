@@ -1,5 +1,5 @@
 from fastapi import FastAPI, APIRouter, HTTPException, Request, Header
-from fastapi.responses import Response
+from fastapi.responses import Response, RedirectResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -12,6 +12,8 @@ import uuid
 from datetime import datetime, timezone, timedelta
 import aiohttp
 import stripe
+from authlib.integrations.starlette_client import OAuth
+from starlette.config import Config
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -29,6 +31,22 @@ api_router = APIRouter(prefix="/api")
 
 # Stripe configuration
 stripe.api_key = os.environ.get('STRIPE_API_KEY', 'sk_test_emergent')
+
+# OAuth configuration
+config = Config(environ=os.environ)
+oauth = OAuth(config)
+
+GOOGLE_CLIENT_ID = os.environ.get('GOOGLE_CLIENT_ID')
+GOOGLE_CLIENT_SECRET = os.environ.get('GOOGLE_CLIENT_SECRET')
+FRONTEND_URL = os.environ.get('FRONTEND_URL', 'http://localhost:3000')
+
+oauth.register(
+    name='google',
+    client_id=GOOGLE_CLIENT_ID,
+    client_secret=GOOGLE_CLIENT_SECRET,
+    server_metadata_url='https://accounts.google.com/.well-known/openid-configuration',
+    client_kwargs={'scope': 'openid email profile'}
+)
 
 # ==================== MODELS ====================
 
@@ -157,34 +175,33 @@ async def require_admin(request: Request, authorization: Optional[str] = Header(
 
 # ==================== AUTH ENDPOINTS ====================
 
-class SessionRequest(BaseModel):
-    session_id: str
+@api_router.get("/auth/session")
+async def auth_session(request: Request):
+    """Initiate Google OAuth login"""
+    redirect_uri = os.environ.get('GOOGLE_REDIRECT_URI', 'https://backend-econgkut.vercel.app/api/auth/google/callback')
+    return await oauth.google.authorize_redirect(request, redirect_uri)
 
-@api_router.post("/auth/session")
-async def create_session(request: SessionRequest, http_request: Request):
-    """Exchange session_id for session_token and user data"""
+@api_router.get("/auth/google/callback")
+async def auth_google_callback(request: Request):
+    """Handle Google OAuth callback"""
     try:
-        # Call Emergent auth service
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                "https://backend-econgkut.vercel.app/api/auth/google/callback",
-                headers={"X-Session-ID": request.session_id}
-            ) as resp:
-                if resp.status != 200:
-                    raise HTTPException(status_code=400, detail="Invalid session ID")
-                
-                data = await resp.json()
+        # Get token from Google
+        token = await oauth.google.authorize_access_token(request)
+        user_info = token.get('userinfo')
+        
+        if not user_info:
+            raise HTTPException(status_code=400, detail="Failed to get user info")
         
         # Check if user exists
-        user_doc = await db.users.find_one({"email": data["email"]}, {"_id": 0})
+        user_doc = await db.users.find_one({"email": user_info["email"]}, {"_id": 0})
         
         if not user_doc:
             # Create new user
             user = User(
-                id=data["id"],
-                email=data["email"],
-                name=data["name"],
-                picture=data.get("picture"),
+                id=str(uuid.uuid4()),
+                email=user_info["email"],
+                name=user_info.get("name", ""),
+                picture=user_info.get("picture"),
                 role="user"
             )
             user_dict = user.model_dump()
@@ -194,7 +211,7 @@ async def create_session(request: SessionRequest, http_request: Request):
             user = User(**user_doc)
         
         # Create session
-        session_token = data["session_token"]
+        session_token = str(uuid.uuid4())
         expires_at = datetime.now(timezone.utc) + timedelta(days=7)
         
         session_obj = UserSession(
@@ -209,11 +226,8 @@ async def create_session(request: SessionRequest, http_request: Request):
         
         await db.user_sessions.insert_one(session_dict)
         
-        # Return user data and set cookie
-        response = Response(
-            content=user.model_dump_json(),
-            media_type="application/json"
-        )
+        # Redirect to frontend with session token
+        response = RedirectResponse(url=f"{FRONTEND_URL}/auth/callback?token={session_token}")
         response.set_cookie(
             key="session_token",
             value=session_token,
@@ -227,8 +241,8 @@ async def create_session(request: SessionRequest, http_request: Request):
         return response
         
     except Exception as e:
-        logging.error(f"Session creation error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logging.error(f"OAuth callback error: {e}")
+        return RedirectResponse(url=f"{FRONTEND_URL}?error=auth_failed")
 
 @api_router.get("/auth/me")
 async def get_me(request: Request, authorization: Optional[str] = Header(None)):
