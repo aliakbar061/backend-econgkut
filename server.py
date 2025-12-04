@@ -167,7 +167,7 @@ async def create_session(request: SessionRequest, http_request: Request):
         # Call Emergent auth service
         async with aiohttp.ClientSession() as session:
             async with session.get(
-                "https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data",
+                "https://backend-econgkut.vercel.app/api/auth/google/callback",
                 headers={"X-Session-ID": request.session_id}
             ) as resp:
                 if resp.status != 200:
