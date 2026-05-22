@@ -30,8 +30,10 @@ async def lifespan(app: FastAPI):
     logging.info("Application shutting down...")
     client.close()
 
-cors_origins = os.environ.get('CORS_ORIGINS')
-
+# CORS origins: support comma-separated list in env variable
+# Format: CORS_ORIGINS=https://econgkut.vercel.app,http://localhost:3000
+_cors_env = os.environ.get('CORS_ORIGINS', '')
+cors_origins = [o.strip() for o in _cors_env.split(',') if o.strip()]
 
 # Google OAuth configuration
 GOOGLE_CLIENT_ID = os.environ.get('GOOGLE_CLIENT_ID', '')
@@ -544,11 +546,14 @@ async def create_attendance(data: AttendanceCreate, request: Request, authorizat
         time=time_str,
         status=final_status,
         location=data.location,
-        photo_base64=data.photo_base64
     )
     
     att_dict = attendance.model_dump()
     att_dict['created_at'] = att_dict['created_at'].isoformat()
+    
+    # Serialize nested location object jika ada
+    if att_dict.get('location') and hasattr(att_dict['location'], '__dict__'):
+        att_dict['location'] = att_dict['location'].__dict__
     
     await db.attendance.insert_one(att_dict)
     return attendance
@@ -648,9 +653,24 @@ async def seed_data():
 
 # ==================== MIDDLEWARE & ROUTER ====================
 
+# ==================== CORS MIDDLEWARE ====================
+# Selalu izinkan: Vercel domains, localhost, dan semua yang ada di CORS_ORIGINS env
+_default_origins = [
+    "http://localhost:3000",
+    "http://localhost:3001",
+    "http://127.0.0.1:3000",
+]
+
+# Regex: izinkan semua *.vercel.app dan origin dari env
+# allow_origin_regex mendukung credentials=True (berbeda dengan allow_origins=["*"])
+_vercel_regex = r"https://.*\.vercel\.app"
+
+final_origins = list(set(_default_origins + cors_origins))
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=cors_origins,
+    allow_origins=final_origins,
+    allow_origin_regex=_vercel_regex,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
