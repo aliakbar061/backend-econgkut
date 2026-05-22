@@ -425,7 +425,7 @@ async def delete_booking(booking_id: str, request: Request, authorization: Optio
 async def get_all_bookings(request: Request, authorization: Optional[str] = Header(None)):
     """Get all bookings"""
     user = await require_auth(request, authorization)
-    if user.role != "admin" and user.division not in ["Operasional & Pengolahan"]:
+    if user.role != "admin" and user.division not in ["Operasional", "Pengolahan", "Operasional & Pengolahan"]:
         raise HTTPException(status_code=403, detail="Akses ditolak. Membutuhkan divisi Operasional & Pengolahan.")
     
     bookings = await db.bookings.find({}, {"_id": 0}).sort("created_at", -1).to_list(1000)
