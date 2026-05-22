@@ -103,6 +103,7 @@ class AdminStats(BaseModel):
     total_waste_collected: float
 
 class UserUpdateAdmin(BaseModel):
+    name: Optional[str] = None
     role: Optional[str] = None
     division: Optional[str] = None
     position: Optional[str] = None
@@ -525,7 +526,9 @@ async def update_user_admin(
     if update_data.role is not None and user.role != "admin" and user.position not in ["Kepala", "Pimpinan", "Kepala Divisi"]:
         raise HTTPException(status_code=403, detail="Hanya Kepala/Pimpinan Divisi yang bisa mengubah role.")
     
-    update_fields: Dict[str, Any] = {}
+    update_fields = {}
+    if update_data.name is not None:
+        update_fields["name"] = update_data.name
     if update_data.role is not None:
         update_fields["role"] = update_data.role
     if update_data.division is not None:
