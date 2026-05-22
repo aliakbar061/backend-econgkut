@@ -442,7 +442,7 @@ async def get_all_bookings(request: Request, authorization: Optional[str] = Head
 async def update_booking_status(booking_id: str, update_data: BookingUpdate, request: Request, authorization: Optional[str] = Header(None)):
     """Update booking status"""
     user = await require_auth(request, authorization)
-    if user.role != "admin" and user.division not in ["Operasional & Pengolahan"]:
+    if user.role != "admin" and user.division not in ["Operasional", "Pengolahan", "Operasional & Pengolahan"]:
         raise HTTPException(status_code=403, detail="Akses ditolak.")
     
     # ✅ Prepare update data
@@ -469,7 +469,7 @@ async def update_booking_status(booking_id: str, update_data: BookingUpdate, req
 async def get_admin_stats(request: Request, authorization: Optional[str] = Header(None)):
     """Get admin dashboard stats"""
     user = await require_auth(request, authorization)
-    if user.role != "admin" and user.division not in ["Keuangan", "Operasional & Pengolahan"]:
+    if user.role != "admin" and user.division not in ["Keuangan", "Operasional", "Pengolahan", "Operasional & Pengolahan"]:
         raise HTTPException(status_code=403, detail="Akses ditolak.")
     
     total_bookings = await db.bookings.count_documents({})
@@ -492,7 +492,7 @@ async def get_admin_stats(request: Request, authorization: Optional[str] = Heade
 async def get_all_users(request: Request, authorization: Optional[str] = Header(None)):
     """Get all users"""
     user = await require_auth(request, authorization)
-    if user.role != "admin" and user.division not in ["SDM & IT"]:
+    if user.role != "admin" and user.division not in ["SDM", "IT", "SDM & IT"]:
         raise HTTPException(status_code=403, detail="Akses ditolak. Membutuhkan divisi SDM & IT.")
     users = await db.users.find({}, {"_id": 0}).to_list(1000)
     return users
@@ -506,11 +506,11 @@ async def update_user_admin(
 ):
     """Update user role, division, position"""
     user = await require_auth(request, authorization)
-    if user.role != "admin" and user.division not in ["SDM & IT"]:
+    if user.role != "admin" and user.division not in ["SDM", "IT", "SDM & IT"]:
         raise HTTPException(status_code=403, detail="Akses ditolak.")
     
-    # Hanya admin atau Kepala/Pimpinan Divisi (SDM & IT) yang bisa ganti role
-    if update_data.role is not None and user.role != "admin" and user.position not in ["Kepala", "Pimpinan"]:
+    # Hanya admin atau Kepala/Pimpinan Divisi yang bisa ganti role
+    if update_data.role is not None and user.role != "admin" and user.position not in ["Kepala", "Pimpinan", "Kepala Divisi"]:
         raise HTTPException(status_code=403, detail="Hanya Kepala/Pimpinan Divisi yang bisa mengubah role.")
     
     update_fields: Dict[str, Any] = {}
@@ -588,7 +588,7 @@ async def get_my_attendance(request: Request, authorization: Optional[str] = Hea
 async def get_attendance_report(month: int, year: int, request: Request, authorization: Optional[str] = Header(None)):
     user = await require_auth(request, authorization)
     
-    if user.role != "admin" and user.division not in ["SDM & IT"]:
+    if user.role != "admin" and user.division not in ["SDM", "IT", "SDM & IT"]:
         raise HTTPException(status_code=403, detail="Not authorized")
         
     date_prefix = f"{year}-{month:02d}"
@@ -609,7 +609,7 @@ async def get_attendance_report(month: int, year: int, request: Request, authori
 async def update_attendance_status(att_id: str, update_data: AttendanceUpdate, request: Request, authorization: Optional[str] = Header(None)):
     user = await require_auth(request, authorization)
     
-    if user.role != "admin" and user.division not in ["SDM & IT"]:
+    if user.role != "admin" and user.division not in ["SDM", "IT", "SDM & IT"]:
         raise HTTPException(status_code=403, detail="Not authorized")
         
     result = await db.attendance.update_one(
