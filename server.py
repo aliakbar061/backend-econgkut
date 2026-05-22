@@ -748,7 +748,7 @@ async def get_finance_transactions(request: Request, authorization: Optional[str
     return transactions
 
 @api_router.get("/finance/report")
-async def get_finance_report(month: Optional[int] = None, year: Optional[int] = None, request: Request, authorization: Optional[str] = Header(None)):
+async def get_finance_report(request: Request, month: Optional[int] = None, year: Optional[int] = None, authorization: Optional[str] = Header(None)):
     user = await require_auth(request, authorization)
     if user.role != "admin" and user.division != "Keuangan" and user.position != "Pimpinan":
         raise HTTPException(status_code=403, detail="Akses ditolak")
