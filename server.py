@@ -508,6 +508,18 @@ async def update_user_admin(
     user = await require_auth(request, authorization)
     if user.role != "admin" and user.division not in ["SDM", "IT", "SDM & IT"]:
         raise HTTPException(status_code=403, detail="Akses ditolak.")
+        
+    target_user = await db.users.find_one({"id": user_id})
+    if not target_user:
+        raise HTTPException(status_code=404, detail="User not found")
+        
+    # Non-admin cannot modify an admin user
+    if user.role != "admin" and target_user.get("role") == "admin":
+        raise HTTPException(status_code=403, detail="Anda tidak memiliki izin untuk mengubah data Admin.")
+        
+    # Non-admin cannot grant admin role
+    if update_data.role == "admin" and user.role != "admin":
+        raise HTTPException(status_code=403, detail="Anda tidak dapat memberikan akses Admin.")
     
     # Hanya admin atau Kepala/Pimpinan Divisi yang bisa ganti role
     if update_data.role is not None and user.role != "admin" and user.position not in ["Kepala", "Pimpinan", "Kepala Divisi"]:
