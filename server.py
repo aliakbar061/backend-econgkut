@@ -127,6 +127,9 @@ class AttendanceCreate(BaseModel):
     status: str
     location: Optional[Location] = None
 
+class AttendanceUpdate(BaseModel):
+    status: str
+
 # ==================== CREATE APP & ROUTER ====================
 
 app = FastAPI(lifespan=lifespan)
@@ -420,8 +423,10 @@ async def delete_booking(booking_id: str, request: Request, authorization: Optio
 
 @api_router.get("/admin/bookings", response_model=List[Booking])
 async def get_all_bookings(request: Request, authorization: Optional[str] = Header(None)):
-    """Get all bookings (admin only)"""
-    await require_admin(request, authorization)
+    """Get all bookings"""
+    user = await require_auth(request, authorization)
+    if user.role != "admin" and user.division not in ["Operasional", "Pengolahan"]:
+        raise HTTPException(status_code=403, detail="Akses ditolak. Membutuhkan divisi Operasional/Pengolahan.")
     
     bookings = await db.bookings.find({}, {"_id": 0}).sort("created_at", -1).to_list(1000)
     
@@ -435,8 +440,10 @@ async def get_all_bookings(request: Request, authorization: Optional[str] = Head
 
 @api_router.patch("/admin/bookings/{booking_id}")
 async def update_booking_status(booking_id: str, update_data: BookingUpdate, request: Request, authorization: Optional[str] = Header(None)):
-    """Update booking status (admin only)"""
-    await require_admin(request, authorization)
+    """Update booking status"""
+    user = await require_auth(request, authorization)
+    if user.role != "admin" and user.division not in ["Operasional", "Pengolahan"]:
+        raise HTTPException(status_code=403, detail="Akses ditolak.")
     
     # ✅ Prepare update data
     update_fields = {
@@ -461,7 +468,9 @@ async def update_booking_status(booking_id: str, update_data: BookingUpdate, req
 @api_router.get("/admin/stats", response_model=AdminStats)
 async def get_admin_stats(request: Request, authorization: Optional[str] = Header(None)):
     """Get admin dashboard stats"""
-    await require_admin(request, authorization)
+    user = await require_auth(request, authorization)
+    if user.role != "admin" and user.division not in ["Keuangan", "Operasional", "Pengolahan"]:
+        raise HTTPException(status_code=403, detail="Akses ditolak.")
     
     total_bookings = await db.bookings.count_documents({})
     pending_bookings = await db.bookings.count_documents({"status": "pending"})
@@ -481,8 +490,10 @@ async def get_admin_stats(request: Request, authorization: Optional[str] = Heade
 
 @api_router.get("/admin/users")
 async def get_all_users(request: Request, authorization: Optional[str] = Header(None)):
-    """Get all users (admin only)"""
-    await require_admin(request, authorization)
+    """Get all users"""
+    user = await require_auth(request, authorization)
+    if user.role != "admin" and user.division not in ["SDM", "IT"]:
+        raise HTTPException(status_code=403, detail="Akses ditolak. Membutuhkan divisi SDM/IT.")
     users = await db.users.find({}, {"_id": 0}).to_list(1000)
     return users
 
@@ -493,8 +504,14 @@ async def update_user_admin(
     request: Request,
     authorization: Optional[str] = Header(None)
 ):
-    """Update user role, division, position (admin only)"""
-    await require_admin(request, authorization)
+    """Update user role, division, position"""
+    user = await require_auth(request, authorization)
+    if user.role != "admin" and user.division not in ["SDM", "IT"]:
+        raise HTTPException(status_code=403, detail="Akses ditolak.")
+    
+    # Hanya admin atau Kepala Divisi (SDM/IT) yang bisa ganti role
+    if update_data.role is not None and user.role != "admin" and user.position != "Kepala Divisi":
+        raise HTTPException(status_code=403, detail="Hanya Kepala Divisi yang bisa mengubah role.")
     
     update_fields: Dict[str, Any] = {}
     if update_data.role is not None:
@@ -571,7 +588,7 @@ async def get_my_attendance(request: Request, authorization: Optional[str] = Hea
 async def get_attendance_report(month: int, year: int, request: Request, authorization: Optional[str] = Header(None)):
     user = await require_auth(request, authorization)
     
-    if user.role not in ["admin", "staff"]:
+    if user.role != "admin" and user.division not in ["SDM", "IT"]:
         raise HTTPException(status_code=403, detail="Not authorized")
         
     date_prefix = f"{year}-{month:02d}"
@@ -587,6 +604,23 @@ async def get_attendance_report(month: int, year: int, request: Request, authori
         if isinstance(r.get('created_at'), str):
             r['created_at'] = datetime.fromisoformat(r['created_at'])
     return records
+
+@api_router.patch("/attendance/{att_id}")
+async def update_attendance_status(att_id: str, update_data: AttendanceUpdate, request: Request, authorization: Optional[str] = Header(None)):
+    user = await require_auth(request, authorization)
+    
+    if user.role != "admin" and user.division not in ["SDM", "IT"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+        
+    result = await db.attendance.update_one(
+        {"id": att_id},
+        {"$set": {"status": update_data.status}}
+    )
+    
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Attendance record not found")
+        
+    return {"success": True}
 
 @api_router.post("/seed-data")
 async def seed_data():
