@@ -108,6 +108,7 @@ class UserUpdateAdmin(BaseModel):
 class Location(BaseModel):
     lat: float
     lng: float
+    address: Optional[str] = None
 
 class Attendance(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -118,13 +119,11 @@ class Attendance(BaseModel):
     time: str
     status: str
     location: Optional[Location] = None
-    photo_base64: Optional[str] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 class AttendanceCreate(BaseModel):
     status: str
     location: Optional[Location] = None
-    photo_base64: Optional[str] = None
 
 # ==================== CREATE APP & ROUTER ====================
 
