@@ -131,6 +131,24 @@ class AttendanceCreate(BaseModel):
 class AttendanceUpdate(BaseModel):
     status: str
 
+class FinanceTransactionCreate(BaseModel):
+    type: str # 'expense' or 'revenue'
+    category: str
+    amount: float
+    date: str
+    notes: Optional[str] = None
+
+class FinanceTransaction(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    user_id: str
+    user_name: str
+    type: str
+    category: str
+    amount: float
+    date: str
+    notes: Optional[str] = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
 # ==================== CREATE APP & ROUTER ====================
 
 app = FastAPI(lifespan=lifespan)
@@ -691,6 +709,103 @@ async def delete_all_attendance(request: Request, authorization: Optional[str] =
         
     # Hapus semua data absensi
     await db.attendance.delete_many({})
+    return {"success": True}
+
+# ==================== FINANCE ENDPOINTS ====================
+
+@api_router.post("/finance/transactions")
+async def create_finance_transaction(data: FinanceTransactionCreate, request: Request, authorization: Optional[str] = Header(None)):
+    user = await require_auth(request, authorization)
+    if user.role != "admin" and user.division != "Keuangan" and user.position != "Pimpinan":
+        raise HTTPException(status_code=403, detail="Akses ditolak")
+        
+    transaction = FinanceTransaction(
+        user_id=user.id,
+        user_name=user.name,
+        type=data.type,
+        category=data.category,
+        amount=data.amount,
+        date=data.date,
+        notes=data.notes
+    )
+    
+    t_dict = transaction.model_dump()
+    t_dict['created_at'] = t_dict['created_at'].isoformat()
+    
+    await db.finance_transactions.insert_one(t_dict)
+    return transaction
+
+@api_router.get("/finance/transactions", response_model=List[FinanceTransaction])
+async def get_finance_transactions(request: Request, authorization: Optional[str] = Header(None)):
+    user = await require_auth(request, authorization)
+    if user.role != "admin" and user.division != "Keuangan" and user.position != "Pimpinan":
+        raise HTTPException(status_code=403, detail="Akses ditolak")
+        
+    transactions = await db.finance_transactions.find({}, {"_id": 0}).sort("date", -1).to_list(1000)
+    for t in transactions:
+        if isinstance(t.get('created_at'), str):
+            t['created_at'] = datetime.fromisoformat(t['created_at'])
+    return transactions
+
+@api_router.get("/finance/report")
+async def get_finance_report(month: Optional[int] = None, year: Optional[int] = None, request: Request, authorization: Optional[str] = Header(None)):
+    user = await require_auth(request, authorization)
+    if user.role != "admin" and user.division != "Keuangan" and user.position != "Pimpinan":
+        raise HTTPException(status_code=403, detail="Akses ditolak")
+        
+    # Filter by month and year if provided
+    date_query_finance = {}
+    if month and year:
+        date_prefix = f"{year}-{month:02d}"
+        date_query_finance["date"] = {"$regex": f"^{date_prefix}"}
+    
+    paid_bookings = await db.bookings.find({"payment_status": "paid", "status": "completed"}, {"_id": 0}).to_list(10000)
+    
+    if month and year:
+        filtered_bookings = []
+        for b in paid_bookings:
+            dt = b.get('updated_at')
+            if isinstance(dt, str):
+                dt = datetime.fromisoformat(dt)
+            if dt and dt.month == month and dt.year == year:
+                filtered_bookings.append(b)
+        paid_bookings = filtered_bookings
+
+    total_revenue_bookings = sum([b["estimated_price"] for b in paid_bookings])
+    
+    manual_transactions = await db.finance_transactions.find(date_query_finance, {"_id": 0}).to_list(10000)
+    
+    total_expense = 0
+    total_revenue_manual = 0
+    for t in manual_transactions:
+        if t["type"] == "expense":
+            total_expense += t["amount"]
+        elif t["type"] == "revenue":
+            total_revenue_manual += t["amount"]
+            
+    total_revenue = total_revenue_bookings + total_revenue_manual
+    net_profit = total_revenue - total_expense
+    
+    return {
+        "revenue_from_bookings": total_revenue_bookings,
+        "revenue_from_manual": total_revenue_manual,
+        "total_revenue": total_revenue,
+        "total_expense": total_expense,
+        "net_profit": net_profit,
+        "transactions_count": len(manual_transactions),
+        "paid_bookings_count": len(paid_bookings)
+    }
+
+@api_router.delete("/finance/transactions/{tx_id}")
+async def delete_finance_transaction(tx_id: str, request: Request, authorization: Optional[str] = Header(None)):
+    user = await require_auth(request, authorization)
+    if user.role != "admin" and user.division != "Keuangan" and user.position != "Pimpinan":
+        raise HTTPException(status_code=403, detail="Akses ditolak")
+        
+    result = await db.finance_transactions.delete_one({"id": tx_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+        
     return {"success": True}
 
 
