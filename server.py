@@ -545,6 +545,38 @@ async def update_user_admin(
     
     return {"success": True}
 
+@api_router.delete("/admin/users/{user_id}")
+async def delete_user_admin(
+    user_id: str,
+    request: Request,
+    authorization: Optional[str] = Header(None)
+):
+    """Delete a user from the system"""
+    user = await require_auth(request, authorization)
+    
+    # Check permissions (only Admin or SDM/IT)
+    if user.role != "admin" and user.division not in ["SDM", "IT", "SDM & IT"]:
+        raise HTTPException(status_code=403, detail="Akses ditolak.")
+        
+    target_user = await db.users.find_one({"id": user_id})
+    if not target_user:
+        raise HTTPException(status_code=404, detail="User not found")
+        
+    # Prevent deleting an admin if not admin
+    if user.role != "admin" and target_user.get("role") == "admin":
+        raise HTTPException(status_code=403, detail="Anda tidak memiliki izin untuk menghapus data Admin.")
+        
+    # Prevent self-deletion
+    if user.id == user_id:
+        raise HTTPException(status_code=400, detail="Anda tidak dapat menghapus akun Anda sendiri.")
+
+    # Delete the user
+    result = await db.users.delete_one({"id": user_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=500, detail="Gagal menghapus pengguna")
+    
+    return {"success": True, "message": "Pengguna berhasil dihapus"}
+
 # ==================== SEED DATA ====================
 
 # ==================== ATTENDANCE ENDPOINTS ====================
