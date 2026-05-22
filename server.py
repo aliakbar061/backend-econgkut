@@ -30,6 +30,9 @@ async def lifespan(app: FastAPI):
     logging.info("Application shutting down...")
     client.close()
 
+app = FastAPI(lifespan=lifespan)
+api_router = APIRouter(prefix="/api")
+
 # CORS origins: support comma-separated list in env variable
 # Format: CORS_ORIGINS=https://econgkut.vercel.app,http://localhost:3000
 _cors_env = os.environ.get('CORS_ORIGINS', '')
@@ -753,25 +756,28 @@ async def get_finance_report(request: Request, month: Optional[int] = None, year
     if user.role != "admin" and user.division != "Keuangan" and user.position != "Pimpinan":
         raise HTTPException(status_code=403, detail="Akses ditolak")
         
+    # Ambil semua paid bookings (sama persis dengan logic di AdminDashboard)
+    all_paid_bookings = await db.bookings.find({"payment_status": "paid"}, {"_id": 0}).to_list(10000)
+    all_time_revenue_bookings = sum([b["estimated_price"] for b in all_paid_bookings])
+    
     # Filter by month and year if provided
     date_query_finance = {}
     if month and year:
         date_prefix = f"{year}-{month:02d}"
         date_query_finance["date"] = {"$regex": f"^{date_prefix}"}
     
-    paid_bookings = await db.bookings.find({"payment_status": "paid", "status": "completed"}, {"_id": 0}).to_list(10000)
-    
+    paid_bookings_monthly = []
     if month and year:
-        filtered_bookings = []
-        for b in paid_bookings:
-            dt = b.get('updated_at')
+        for b in all_paid_bookings:
+            dt = b.get('updated_at') or b.get('created_at')
             if isinstance(dt, str):
-                dt = datetime.fromisoformat(dt)
+                dt = datetime.fromisoformat(dt.replace("Z", "+00:00"))
             if dt and dt.month == month and dt.year == year:
-                filtered_bookings.append(b)
-        paid_bookings = filtered_bookings
+                paid_bookings_monthly.append(b)
+    else:
+        paid_bookings_monthly = all_paid_bookings
 
-    total_revenue_bookings = sum([b["estimated_price"] for b in paid_bookings])
+    total_revenue_bookings = sum([b["estimated_price"] for b in paid_bookings_monthly])
     
     manual_transactions = await db.finance_transactions.find(date_query_finance, {"_id": 0}).to_list(10000)
     
@@ -786,6 +792,12 @@ async def get_finance_report(request: Request, month: Optional[int] = None, year
     total_revenue = total_revenue_bookings + total_revenue_manual
     net_profit = total_revenue - total_expense
     
+    # Hitung all_time_manual
+    all_time_manual_tx = await db.finance_transactions.find({}, {"_id": 0}).to_list(10000)
+    all_time_revenue_manual = sum([t["amount"] for t in all_time_manual_tx if t["type"] == "revenue"])
+    all_time_expense = sum([t["amount"] for t in all_time_manual_tx if t["type"] == "expense"])
+    all_time_revenue_total = all_time_revenue_bookings + all_time_revenue_manual
+    
     return {
         "revenue_from_bookings": total_revenue_bookings,
         "revenue_from_manual": total_revenue_manual,
@@ -793,7 +805,9 @@ async def get_finance_report(request: Request, month: Optional[int] = None, year
         "total_expense": total_expense,
         "net_profit": net_profit,
         "transactions_count": len(manual_transactions),
-        "paid_bookings_count": len(paid_bookings)
+        "paid_bookings_count": len(paid_bookings_monthly),
+        "all_time_revenue": all_time_revenue_total,
+        "all_time_expense": all_time_expense
     }
 
 @api_router.delete("/finance/transactions/{tx_id}")
