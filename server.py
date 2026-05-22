@@ -487,6 +487,29 @@ async def update_booking_status(booking_id: str, update_data: BookingUpdate, req
     
     return {"success": True}
 
+@api_router.delete("/admin/bookings/{booking_id}")
+async def admin_delete_booking(booking_id: str, request: Request, authorization: Optional[str] = Header(None)):
+    """Delete a specific booking (Admin/Operasional only)"""
+    user = await require_auth(request, authorization)
+    if user.role != "admin" and user.division not in ["Operasional", "Pengolahan", "Operasional & Pengolahan"]:
+        raise HTTPException(status_code=403, detail="Akses ditolak.")
+    
+    result = await db.bookings.delete_one({"id": booking_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Booking not found")
+        
+    return {"success": True, "message": "Booking deleted successfully"}
+
+@api_router.delete("/admin/bookings")
+async def admin_delete_all_bookings(request: Request, authorization: Optional[str] = Header(None)):
+    """Delete all bookings (Admin/Operasional only)"""
+    user = await require_auth(request, authorization)
+    if user.role != "admin" and user.division not in ["Operasional", "Pengolahan", "Operasional & Pengolahan"]:
+        raise HTTPException(status_code=403, detail="Akses ditolak.")
+    
+    result = await db.bookings.delete_many({})
+    return {"success": True, "message": f"Successfully deleted {result.deleted_count} bookings", "deleted_count": result.deleted_count}
+
 @api_router.get("/admin/stats", response_model=AdminStats)
 async def get_admin_stats(request: Request, authorization: Optional[str] = Header(None)):
     """Get admin dashboard stats"""
