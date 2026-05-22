@@ -669,6 +669,31 @@ async def update_attendance_status(att_id: str, update_data: AttendanceUpdate, r
         
     return {"success": True}
 
+@api_router.delete("/attendance/{att_id}")
+async def delete_attendance(att_id: str, request: Request, authorization: Optional[str] = Header(None)):
+    user = await require_auth(request, authorization)
+    
+    if user.role != "admin" and user.division not in ["SDM", "IT", "SDM & IT"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+        
+    result = await db.attendance.delete_one({"id": att_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Attendance record not found")
+        
+    return {"success": True}
+
+@api_router.delete("/attendance/report/all")
+async def delete_all_attendance(request: Request, authorization: Optional[str] = Header(None)):
+    user = await require_auth(request, authorization)
+    
+    if user.role != "admin" and user.division not in ["SDM", "IT", "SDM & IT"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+        
+    # Hapus semua data absensi
+    await db.attendance.delete_many({})
+    return {"success": True}
+
+
 @api_router.post("/seed-data")
 async def seed_data():
     """Seed initial waste types data"""
