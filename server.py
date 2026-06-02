@@ -447,7 +447,7 @@ async def delete_booking(booking_id: str, request: Request, authorization: Optio
 async def get_all_bookings(request: Request, authorization: Optional[str] = Header(None)):
     """Get all bookings"""
     user = await require_auth(request, authorization)
-    if user.role != "admin" and user.division not in ["Operasional", "Pengolahan", "Operasional & Pengolahan"]:
+    if user.role != "admin" and user.division not in ["IT", "Operasional", "Pengolahan", "Operasional & Pengolahan"]:
         raise HTTPException(status_code=403, detail="Akses ditolak. Membutuhkan divisi Operasional & Pengolahan.")
     
     bookings = await db.bookings.find({}, {"_id": 0}).sort("created_at", -1).to_list(1000)
@@ -464,7 +464,7 @@ async def get_all_bookings(request: Request, authorization: Optional[str] = Head
 async def update_booking_status(booking_id: str, update_data: BookingUpdate, request: Request, authorization: Optional[str] = Header(None)):
     """Update booking status"""
     user = await require_auth(request, authorization)
-    if user.role != "admin" and user.division not in ["Operasional", "Pengolahan", "Operasional & Pengolahan"]:
+    if user.role != "admin" and user.division not in ["IT", "Operasional", "Pengolahan", "Operasional & Pengolahan"]:
         raise HTTPException(status_code=403, detail="Akses ditolak.")
     
     # ✅ Prepare update data
@@ -514,7 +514,7 @@ async def admin_delete_all_bookings(request: Request, authorization: Optional[st
 async def get_admin_stats(request: Request, authorization: Optional[str] = Header(None)):
     """Get admin dashboard stats"""
     user = await require_auth(request, authorization)
-    if user.role != "admin" and user.division not in ["Keuangan", "Operasional", "Pengolahan", "Operasional & Pengolahan"]:
+    if user.role != "admin" and user.division not in ["IT", "Keuangan", "Operasional", "Pengolahan", "Operasional & Pengolahan"]:
         raise HTTPException(status_code=403, detail="Akses ditolak.")
     
     total_bookings = await db.bookings.count_documents({})
@@ -558,9 +558,9 @@ async def update_user_admin(
     if not target_user:
         raise HTTPException(status_code=404, detail="User not found")
         
-    # Non-admin cannot modify an admin user
-    if user.role != "admin" and target_user.get("role") == "admin":
-        raise HTTPException(status_code=403, detail="Anda tidak memiliki izin untuk mengubah data Admin.")
+    # Non-admin cannot modify an admin or Pimpinan user
+    if user.role != "admin" and (target_user.get("role") == "admin" or target_user.get("position") == "Pimpinan"):
+        raise HTTPException(status_code=403, detail="Anda tidak memiliki izin untuk mengubah data Admin/Pimpinan.")
         
     # Non-admin cannot grant admin role
     if update_data.role == "admin" and user.role != "admin":
@@ -606,9 +606,9 @@ async def delete_user_admin(
     if not target_user:
         raise HTTPException(status_code=404, detail="User not found")
         
-    # Prevent deleting an admin if not admin
-    if user.role != "admin" and target_user.get("role") == "admin":
-        raise HTTPException(status_code=403, detail="Anda tidak memiliki izin untuk menghapus data Admin.")
+    # Prevent deleting an admin or Pimpinan if not admin
+    if user.role != "admin" and (target_user.get("role") == "admin" or target_user.get("position") == "Pimpinan"):
+        raise HTTPException(status_code=403, detail="Anda tidak memiliki izin untuk menghapus data Admin/Pimpinan.")
         
     # Prevent self-deletion
     if user.id == user_id:
@@ -836,7 +836,7 @@ async def get_finance_report(request: Request, month: Optional[int] = None, year
 @api_router.delete("/finance/transactions/{tx_id}")
 async def delete_finance_transaction(tx_id: str, request: Request, authorization: Optional[str] = Header(None)):
     user = await require_auth(request, authorization)
-    if user.role != "admin" and user.division != "Keuangan" and user.position != "Pimpinan":
+    if user.role != "admin" and user.division not in ["IT", "Keuangan"] and user.position != "Pimpinan":
         raise HTTPException(status_code=403, detail="Akses ditolak")
         
     result = await db.finance_transactions.delete_one({"id": tx_id})
