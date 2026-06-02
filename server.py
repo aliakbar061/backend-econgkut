@@ -182,6 +182,8 @@ class ActivityLog(BaseModel):
 class SystemIssueCreate(BaseModel):
     issue_type: str
     description: str
+    priority: str = "Sedang"
+    contact_info: str = "" 
 
 class SystemIssueUpdateStatus(BaseModel):
     status: str
@@ -193,6 +195,8 @@ class SystemIssue(BaseModel):
     reporter_division: Optional[str] = None
     issue_type: str
     description: str
+    priority: str = "Sedang"
+    contact_info: str = ""
     status: str = "Open" # Open, In Progress, Resolved
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -312,6 +316,10 @@ async def google_auth(auth_data: GoogleAuthRequest):
             "role": user.role,
             "sessionToken": session_token
         }
+        
+        
+        # Log successful login
+        await log_activity(user.id, user.name, "LOGIN", "Berhasil login ke sistem")
         
         return JSONResponse(content=response_data)
         
