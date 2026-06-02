@@ -404,6 +404,7 @@ async def create_booking(booking_data: BookingCreate, request: Request, authoriz
     
     await db.bookings.insert_one(booking_dict)
     
+    await log_activity(user.id, user.name, "CREATE_BOOKING", f"Membuat pesanan baru untuk {waste_type['name']}")
     return booking
 
 @api_router.get("/bookings", response_model=List[Booking])
@@ -503,6 +504,7 @@ async def delete_booking(booking_id: str, request: Request, authorization: Optio
     if result.deleted_count == 0:
         raise HTTPException(status_code=500, detail="Failed to delete booking")
     
+    await log_activity(user.id, user.name, "DELETE_BOOKING", f"Membatalkan pesanan {booking_id}")
     return {"success": True, "message": "Booking deleted successfully"}
 
 # ==================== ADMIN ENDPOINTS ====================
@@ -655,6 +657,7 @@ async def update_user_admin(
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="User not found")
     
+    await log_activity(user.id, user.name, "UPDATE_USER", f"Mengubah role/divisi untuk {update_data.email if update_data.email else user_id}")
     return {"success": True}
 
 @api_router.delete("/admin/users/{user_id}")
@@ -687,6 +690,7 @@ async def delete_user_admin(
     if result.deleted_count == 0:
         raise HTTPException(status_code=500, detail="Gagal menghapus pengguna")
     
+    await log_activity(user.id, user.name, "DELETE_USER", f"Menghapus pengguna {user_id}")
     return {"success": True, "message": "Pengguna berhasil dihapus"}
 
 # ==================== SEED DATA ====================
@@ -732,6 +736,7 @@ async def create_attendance(data: AttendanceCreate, request: Request, authorizat
         att_dict['location'] = att_dict['location'].__dict__
     
     await db.attendance.insert_one(att_dict)
+    await log_activity(user.id, user.name, "CREATE_ATTENDANCE", f"Melakukan absensi {data.type}")
     return attendance
 
 @api_router.get("/attendance/me", response_model=List[Attendance])
@@ -779,6 +784,7 @@ async def update_attendance_status(att_id: str, update_data: AttendanceUpdate, r
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Attendance record not found")
         
+    await log_activity(user.id, user.name, "UPDATE_ATTENDANCE", f"Mengubah status absensi {att_id} menjadi {update_data.status}")
     return {"success": True}
 
 @api_router.delete("/attendance/{att_id}")
@@ -792,6 +798,7 @@ async def delete_attendance(att_id: str, request: Request, authorization: Option
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Attendance record not found")
         
+    await log_activity(user.id, user.name, "DELETE_ATTENDANCE", f"Menghapus data absensi {att_id}")
     return {"success": True}
 
 @api_router.delete("/attendance/report/all")
@@ -827,6 +834,7 @@ async def create_finance_transaction(data: FinanceTransactionCreate, request: Re
     t_dict['created_at'] = t_dict['created_at'].isoformat()
     
     await db.finance_transactions.insert_one(t_dict)
+    await log_activity(user.id, user.name, "CREATE_FINANCE", f"Mencatat keuangan {data.type}: Rp {data.amount}")
     return transaction
 
 @api_router.get("/finance/transactions", response_model=List[FinanceTransaction])
@@ -911,6 +919,7 @@ async def delete_finance_transaction(tx_id: str, request: Request, authorization
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Transaction not found")
         
+    await log_activity(user.id, user.name, "DELETE_FINANCE", f"Menghapus transaksi keuangan {tx_id}")
     return {"success": True}
 
 
@@ -1034,6 +1043,7 @@ async def delete_processing(processing_id: str, request: Request, authorization:
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Data tidak ditemukan")
         
+    await log_activity(user.id, user.name, "DELETE_PROCESSING", f"Menghapus data pengolahan {processing_id}")
     return {"success": True}
 
 
