@@ -562,9 +562,11 @@ async def update_user_admin(
     if user.role != "admin" and (target_user.get("role") == "admin" or target_user.get("position") == "Pimpinan"):
         raise HTTPException(status_code=403, detail="Anda tidak memiliki izin untuk mengubah data Admin/Pimpinan.")
         
-    # Non-admin cannot grant admin role
+    # Non-admin cannot grant admin role or Pimpinan position
     if update_data.role == "admin" and user.role != "admin":
         raise HTTPException(status_code=403, detail="Anda tidak dapat memberikan akses Admin.")
+    if update_data.position == "Pimpinan" and user.role != "admin":
+        raise HTTPException(status_code=403, detail="Anda tidak dapat mengatur posisi menjadi Pimpinan.")
     
     # Hanya admin atau Kepala/Pimpinan Divisi yang bisa ganti role
     if update_data.role is not None and user.role != "admin" and user.position not in ["Kepala", "Pimpinan", "Kepala Divisi"]:
