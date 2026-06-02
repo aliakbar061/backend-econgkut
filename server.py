@@ -170,6 +170,33 @@ class WasteProcessing(BaseModel):
     notes: Optional[str] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
+
+class ActivityLog(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    user_id: str
+    user_name: str
+    action: str
+    details: str
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+class SystemIssueCreate(BaseModel):
+    issue_type: str
+    description: str
+
+class SystemIssueUpdateStatus(BaseModel):
+    status: str
+
+class SystemIssue(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    reporter_id: str
+    reporter_name: str
+    reporter_division: Optional[str] = None
+    issue_type: str
+    description: str
+    status: str = "Open" # Open, In Progress, Resolved
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
 # ==================== CREATE APP & ROUTER ====================
 
 app = FastAPI(lifespan=lifespan)
@@ -503,6 +530,7 @@ async def update_booking_status(booking_id: str, update_data: BookingUpdate, req
     if result.modified_count == 0:
         raise HTTPException(status_code=404, detail="Booking not found")
     
+    await log_activity(user.id, user.name, "UPDATE_BOOKING_STATUS", f"Mengubah status pesanan {booking_id} menjadi {update_data.status}")
     return {"success": True}
 
 @api_router.delete("/admin/bookings/{booking_id}")
@@ -516,6 +544,7 @@ async def admin_delete_booking(booking_id: str, request: Request, authorization:
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Booking not found")
         
+    await log_activity(user.id, user.name, "DELETE_BOOKING", f"Menghapus pesanan {booking_id}")
     return {"success": True, "message": "Booking deleted successfully"}
 
 @api_router.delete("/admin/bookings")
@@ -973,6 +1002,7 @@ async def create_processing(data: WasteProcessingCreate, request: Request, autho
     )
     
     await db.waste_processing.insert_one(new_processing.model_dump())
+    await log_activity(user.id, user.name, "CREATE_PROCESSING", f"Mengolah {data.weight_processed}kg sampah {data.source_waste_category}")
     return {"success": True, "data": new_processing.model_dump()}
 
 @api_router.delete("/processing/{processing_id}")
@@ -985,6 +1015,54 @@ async def delete_processing(processing_id: str, request: Request, authorization:
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Data tidak ditemukan")
         
+    return {"success": True}
+
+
+# ==================== LOGS & ISSUES ====================
+
+@api_router.get("/logs")
+async def get_activity_logs(request: Request, authorization: Optional[str] = Header(None)):
+    user = await require_auth(request, authorization)
+    if user.role != "admin" and user.division not in ["IT", "SDM & IT"]:
+        raise HTTPException(status_code=403, detail="Akses ditolak")
+    logs = await db.activity_logs.find({}, {"_id": 0}).sort("created_at", -1).to_list(1000)
+    return logs
+
+@api_router.post("/issues")
+async def create_issue(data: SystemIssueCreate, request: Request, authorization: Optional[str] = Header(None)):
+    user = await require_auth(request, authorization)
+    new_issue = SystemIssue(
+        reporter_id=user.id,
+        reporter_name=user.name,
+        reporter_division=user.division,
+        **data.model_dump()
+    )
+    await db.system_issues.insert_one(new_issue.model_dump())
+    await log_activity(user.id, user.name, "REPORT_ISSUE", f"Melaporkan kendala: {data.issue_type}")
+    return {"success": True, "data": new_issue.model_dump()}
+
+@api_router.get("/issues")
+async def get_all_issues(request: Request, authorization: Optional[str] = Header(None)):
+    user = await require_auth(request, authorization)
+    if user.role != "admin" and user.division not in ["IT", "SDM & IT", "Pimpinan"]:
+        raise HTTPException(status_code=403, detail="Akses ditolak")
+    issues = await db.system_issues.find({}, {"_id": 0}).sort("created_at", -1).to_list(1000)
+    return issues
+
+@api_router.put("/issues/{issue_id}/status")
+async def update_issue_status(issue_id: str, data: SystemIssueUpdateStatus, request: Request, authorization: Optional[str] = Header(None)):
+    user = await require_auth(request, authorization)
+    if user.role != "admin" and user.division not in ["IT", "SDM & IT"]:
+        raise HTTPException(status_code=403, detail="Akses ditolak")
+    
+    result = await db.system_issues.update_one(
+        {"id": issue_id},
+        {"$set": {"status": data.status, "updated_at": datetime.now(timezone.utc)}}
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Kendala tidak ditemukan")
+        
+    await log_activity(user.id, user.name, "UPDATE_ISSUE", f"Mengubah status kendala {issue_id} menjadi {data.status}")
     return {"success": True}
 
 # ==================== CORS MIDDLEWARE & ROUTER INCLUSION ====================
