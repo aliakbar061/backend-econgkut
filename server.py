@@ -235,6 +235,17 @@ async def get_current_user(request: Request, authorization: Optional[str] = Head
     
     return User(**user_doc)
 
+
+
+async def log_activity(user_id: str, user_name: str, action: str, details: str):
+    try:
+        from pydantic import BaseModel
+        # Ensure it works even if ActivityLog model is placed differently
+        log_entry = {"id": str(uuid.uuid4()), "user_id": user_id, "user_name": user_name, "action": action, "details": details, "created_at": datetime.now(timezone.utc)}
+        await db.activity_logs.insert_one(log_entry)
+    except Exception as e:
+        print(f"Log Error: {e}")
+
 async def require_auth(request: Request, authorization: Optional[str] = Header(None)) -> User:
     """Require authentication"""
     user = await get_current_user(request, authorization)
