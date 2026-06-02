@@ -152,6 +152,24 @@ class FinanceTransaction(BaseModel):
     notes: Optional[str] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
+class WasteProcessingCreate(BaseModel):
+    source_waste_category: str
+    weight_processed: float
+    result_product: str
+    result_quantity: str
+    notes: Optional[str] = None
+
+class WasteProcessing(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    created_by: str
+    created_by_name: str
+    source_waste_category: str
+    weight_processed: float
+    result_product: str
+    result_quantity: str
+    notes: Optional[str] = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
 # ==================== CREATE APP & ROUTER ====================
 
 app = FastAPI(lifespan=lifespan)
@@ -911,7 +929,65 @@ async def seed_data():
     
     return {"message": "Data seeded successfully", "count": len(waste_types)}
 
-# ==================== MIDDLEWARE & ROUTER ====================
+@api_router.get("/processing")
+async def get_all_processing(request: Request, authorization: Optional[str] = Header(None)):
+    user = await require_auth(request, authorization)
+    if user.role != "admin" and user.division not in ["IT", "Operasional", "Pengolahan", "Operasional & Pengolahan"] and user.position != "Pimpinan":
+        raise HTTPException(status_code=403, detail="Akses ditolak")
+        
+    processings = await db.waste_processing.find({}, {"_id": 0}).sort("created_at", -1).to_list(1000)
+    return processings
+
+@api_router.post("/processing")
+async def create_processing(data: WasteProcessingCreate, request: Request, authorization: Optional[str] = Header(None)):
+    user = await require_auth(request, authorization)
+    if user.role != "admin" and user.division not in ["IT", "Operasional", "Pengolahan", "Operasional & Pengolahan"] and user.position != "Pimpinan":
+        raise HTTPException(status_code=403, detail="Akses ditolak")
+        
+    # Check if there is enough waste available
+    # Total accumulated organic/non-organic waste
+    pipeline = [
+        {"$match": {"status": "completed", "waste_category": data.source_waste_category}},
+        {"$group": {"_id": None, "total": {"$sum": "$estimated_weight"}}}
+    ]
+    result = await db.bookings.aggregate(pipeline).to_list(1)
+    total_waste = result[0]["total"] if result else 0
+
+    # Total processed
+    pipeline_processed = [
+        {"$match": {"source_waste_category": data.source_waste_category}},
+        {"$group": {"_id": None, "total": {"$sum": "$weight_processed"}}}
+    ]
+    result_processed = await db.waste_processing.aggregate(pipeline_processed).to_list(1)
+    total_processed = result_processed[0]["total"] if result_processed else 0
+
+    sisa_sampah = total_waste - total_processed
+
+    if data.weight_processed > sisa_sampah:
+        raise HTTPException(status_code=400, detail=f"Sisa sampah {data.source_waste_category} tidak mencukupi (sisa: {sisa_sampah} kg).")
+
+    new_processing = WasteProcessing(
+        created_by=user.id,
+        created_by_name=user.name,
+        **data.model_dump()
+    )
+    
+    await db.waste_processing.insert_one(new_processing.model_dump())
+    return {"success": True, "data": new_processing.model_dump()}
+
+@api_router.delete("/processing/{processing_id}")
+async def delete_processing(processing_id: str, request: Request, authorization: Optional[str] = Header(None)):
+    user = await require_auth(request, authorization)
+    if user.role != "admin" and user.division not in ["IT", "Operasional", "Pengolahan", "Operasional & Pengolahan"] and user.position != "Pimpinan":
+        raise HTTPException(status_code=403, detail="Akses ditolak")
+        
+    result = await db.waste_processing.delete_one({"id": processing_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Data tidak ditemukan")
+        
+    return {"success": True}
+
+# ==================== CORS MIDDLEWARE & ROUTER INCLUSION ====================
 
 # ==================== CORS MIDDLEWARE ====================
 # Selalu izinkan: Vercel domains, localhost, dan semua yang ada di CORS_ORIGINS env
