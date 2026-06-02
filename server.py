@@ -538,7 +538,7 @@ async def get_all_users(request: Request, authorization: Optional[str] = Header(
     """Get all users"""
     user = await require_auth(request, authorization)
     if user.role != "admin" and user.division not in ["SDM", "IT", "SDM & IT"]:
-        raise HTTPException(status_code=403, detail="Akses ditolak. Membutuhkan divisi SDM & IT.")
+        raise HTTPException(status_code=403, detail="Akses ditolak. Membutuhkan divisi SDM atau IT.")
     users = await db.users.find({}, {"_id": 0}).to_list(1000)
     return users
 
