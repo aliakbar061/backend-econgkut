@@ -657,7 +657,7 @@ async def update_user_admin(
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="User not found")
     
-    await log_activity(user.id, user.name, "UPDATE_USER", f"Mengubah role/divisi untuk {update_data.email if update_data.email else user_id}")
+    await log_activity(user.id, user.name, "UPDATE_USER", f"Mengubah role/divisi untuk {target_user.get('email', user_id)}")
     return {"success": True}
 
 @api_router.delete("/admin/users/{user_id}")
