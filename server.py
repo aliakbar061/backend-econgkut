@@ -1214,7 +1214,7 @@ act-086,200583532387678793780,Yulianti,REPORT_ISSUE,Melaporkan kendala: Export d
 act-087,100583532387678793779,Ali Akbar,UPDATE_ISSUE,Resolved ISSUE-004 - optimized query,2026-06-02T13:30:00.000000
 act-088,300583532387678793781,Eka Wahyuni,VIEW_REPORT,Melihat laporan kinerja bulan Mei,2026-06-02T14:00:00.000000
 """
-    lines = csv_data.strip().split('\\n')[1:]
+    lines = csv_data.strip().split('\n')[1:]
     logs = []
     issues = {}
     for line in lines:
