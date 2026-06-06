@@ -1284,7 +1284,7 @@ act-088,300583532387678793781,Eka Wahyuni,VIEW_REPORT,Melihat laporan kinerja bu
 
     return {"success": True, "logs_inserted": len(logs), "issues_processed": len(issues)}
 
-app.include_router(api_router, prefix="/api")
+app.include_router(api_router)
 
 logging.basicConfig(
     level=logging.INFO,
